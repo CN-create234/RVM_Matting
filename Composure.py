@@ -14,6 +14,11 @@ from depth_guided_matting import (
     fuse_alpha_with_depth,
     load_depth,
 )
+from pose_guided_matting import (
+    PoseFusionConfig,
+    PoseSequence,
+    fuse_alpha_with_pose,
+)
 
 def rename_exr_sequence(
     src_dir,
@@ -137,6 +142,9 @@ def run_rvm_batch(
     depth_scale=1.0,
     depth_fusion_config=None,
     save_depth_diagnostics=False,
+    pose_json=None,
+    pose_fusion_config=None,
+    save_pose_diagnostics=False,
 ):
     """
     对 input_dir 中的 PNG 序列进行 RVM 批量分割，
@@ -153,6 +161,9 @@ def run_rvm_batch(
     - depth_scale:      深度读入后的单位缩放，阈值默认按毫米设置
     - depth_fusion_config: DepthFusionConfig；None 时使用默认参数
     - save_depth_diagnostics: 保存深度前景/背景置信度图
+    - pose_json:        Sapiens2 逐帧关键点 JSON；None=不启用姿态先验
+    - pose_fusion_config: PoseFusionConfig；None 时使用保守默认参数
+    - save_pose_diagnostics: 保存姿态先验和新增 Alpha 区域
     """
 
     os.makedirs(output_dir, exist_ok=True)
@@ -181,6 +192,14 @@ def run_rvm_batch(
             depth_fusion_config = DepthFusionConfig()
         if save_depth_diagnostics:
             os.makedirs(os.path.join(output_dir, "depth_diagnostics"), exist_ok=True)
+
+    pose_sequence = None
+    if pose_json is not None:
+        pose_sequence = PoseSequence.from_json(pose_json)
+        if pose_fusion_config is None:
+            pose_fusion_config = PoseFusionConfig()
+        if save_pose_diagnostics:
+            os.makedirs(os.path.join(output_dir, "pose_diagnostics"), exist_ok=True)
 
     # ------------------ 预处理 ------------------
     def preprocess_frame(bgr_frame):
@@ -261,6 +280,35 @@ def run_rvm_batch(
                     depth,
                     background_depth_model,
                     depth_fusion_config,
+                )
+
+        if pose_sequence is not None:
+            pose_sequence.validate_alpha_shape(alpha.shape)
+            pose_frame = pose_sequence.frame(fname)
+            if save_pose_diagnostics:
+                alpha, pose_diagnostics = fuse_alpha_with_pose(
+                    alpha,
+                    pose_frame,
+                    pose_fusion_config,
+                    return_diagnostics=True,
+                )
+                pose_diagnostic_dir = os.path.join(output_dir, "pose_diagnostics")
+                for diagnostic_name in ("pose_prior", "alpha_added"):
+                    diagnostic = np.round(
+                        np.clip(pose_diagnostics[diagnostic_name], 0, 1) * 255
+                    ).astype(np.uint8)
+                    cv2.imwrite(
+                        os.path.join(
+                            pose_diagnostic_dir,
+                            f"{base}_{diagnostic_name}.png",
+                        ),
+                        diagnostic,
+                    )
+            else:
+                alpha = fuse_alpha_with_pose(
+                    alpha,
+                    pose_frame,
+                    pose_fusion_config,
                 )
 
         cv2.imwrite(os.path.join(output_dir, f"{base}_fgr.png"), fgr_img)
@@ -462,6 +510,28 @@ def parse_args():
         action="store_true",
         help="Save depth foreground/background confidence maps.",
     )
+    parser.add_argument(
+        "--pose-json",
+        default=None,
+        help="Sapiens2 predictions JSON used for conservative pose-guided fusion.",
+    )
+    parser.add_argument(
+        "--pose-keypoint-threshold",
+        type=float,
+        default=0.25,
+        help="Minimum Sapiens2 keypoint confidence. Default: 0.25.",
+    )
+    parser.add_argument(
+        "--pose-target-alpha",
+        type=float,
+        default=0.98,
+        help="Maximum alpha supplied by the pose prior. Default: 0.98.",
+    )
+    parser.add_argument(
+        "--save-pose-diagnostics",
+        action="store_true",
+        help="Save pose prior and pose-added alpha images.",
+    )
     return parser.parse_args()
 
 
@@ -492,6 +562,12 @@ def main():
             foreground_margin=args.depth_foreground_margin,
             boundary_width=args.depth_boundary_width,
         )
+    pose_fusion_config = None
+    if args.pose_json is not None:
+        pose_fusion_config = PoseFusionConfig(
+            keypoint_threshold=args.pose_keypoint_threshold,
+            target_alpha=args.pose_target_alpha,
+        )
     run_rvm_batch(
         png_dir_video,
         rvm_out_dir,
@@ -500,6 +576,9 @@ def main():
         depth_scale=args.depth_scale,
         depth_fusion_config=depth_fusion_config,
         save_depth_diagnostics=args.save_depth_diagnostics,
+        pose_json=args.pose_json,
+        pose_fusion_config=pose_fusion_config,
+        save_pose_diagnostics=args.save_pose_diagnostics,
     )
 
     final_out_dir = r"D:/CODES/RVM/Results/Test/CompositingResults"
