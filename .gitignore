@@ -1,0 +1,52 @@
+# Python caches and environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv*/
+venv*/
+
+# External repositories, downloaded models, and caches
+Midterm/MatAnyone2/
+Midterm/torch_cache/
+Midterm/_report_render/
+Midterm/SOTA_Test_*/
+Midterm/DepthFusionSyntheticExperiment/
+*.onnx
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.docx
+*.pdf
+
+# Captured, generated, and inspection data
+Results/
+MainGraph/
+bad cases/
+_inspection_*/
+Backup_Original_RVM_*/
+DebugOutputs/
+outputs/
+output/
+
+# Large media and render artifacts
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.zip
+*.7z
+*.exr
+
+# Logs and local tooling
+*.log
+.vs/
+.vscode/
+.idea/
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
