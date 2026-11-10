@@ -7,14 +7,6 @@ import numpy as np
 import cv2
 import onnxruntime as ort
 
-from depth_guided_matting import (
-    BackgroundDepthModel,
-    DepthFusionConfig,
-    find_depth_frame,
-    fuse_alpha_with_depth,
-    load_depth,
-)
-
 def rename_exr_sequence(
     src_dir,
     dst_subdir="renamed",
@@ -131,12 +123,7 @@ def run_rvm_batch(
     output_dir,
     model_path="rvm_mobilenetv3_fp16.onnx",
     downsample_ratio=0.25,
-    providers=("CUDAExecutionProvider", "CPUExecutionProvider"),
-    depth_dir=None,
-    background_depth_dir=None,
-    depth_scale=1.0,
-    depth_fusion_config=None,
-    save_depth_diagnostics=False,
+    providers=("CUDAExecutionProvider", "CPUExecutionProvider")
 ):
     """
     对 input_dir 中的 PNG 序列进行 RVM 批量分割，
@@ -148,11 +135,6 @@ def run_rvm_batch(
     - model_path:       RVM ONNX 模型路径
     - downsample_ratio: RVM downsample_ratio
     - providers:        ONNX Runtime providers
-    - depth_dir:        与 RGB 同名、且已配准到 RGB 坐标系的深度序列；None=保持原 RVM
-    - background_depth_dir: 无演员背景深度序列，用于建立逐像素背景模型
-    - depth_scale:      深度读入后的单位缩放，阈值默认按毫米设置
-    - depth_fusion_config: DepthFusionConfig；None 时使用默认参数
-    - save_depth_diagnostics: 保存深度前景/背景置信度图
     """
 
     os.makedirs(output_dir, exist_ok=True)
@@ -168,19 +150,6 @@ def run_rvm_batch(
 
     # ------------------ 初始化 recurrent states ------------------
     rec = [np.zeros((1, 1, 1, 1), dtype=np.float16) for _ in range(4)]
-
-    background_depth_model = None
-    if (depth_dir is None) != (background_depth_dir is None):
-        raise ValueError("depth_dir 和 background_depth_dir 必须同时提供")
-    if depth_dir is not None:
-        background_depth_model = BackgroundDepthModel.from_directory(
-            background_depth_dir,
-            depth_scale=depth_scale,
-        )
-        if depth_fusion_config is None:
-            depth_fusion_config = DepthFusionConfig()
-        if save_depth_diagnostics:
-            os.makedirs(os.path.join(output_dir, "depth_diagnostics"), exist_ok=True)
 
     # ------------------ 预处理 ------------------
     def preprocess_frame(bgr_frame):
@@ -235,34 +204,6 @@ def run_rvm_batch(
         alpha = (np.transpose(pha[0], (1, 2, 0))[:, :, 0] * 255).astype(np.uint8)
 
         base = os.path.splitext(fname)[0]
-        if background_depth_model is not None:
-            depth_path = find_depth_frame(depth_dir, base)
-            depth = load_depth(depth_path, depth_scale=depth_scale)
-            if save_depth_diagnostics:
-                alpha, diagnostics = fuse_alpha_with_depth(
-                    alpha,
-                    depth,
-                    background_depth_model,
-                    depth_fusion_config,
-                    return_diagnostics=True,
-                )
-                diagnostic_dir = os.path.join(output_dir, "depth_diagnostics")
-                for diagnostic_name in ("foreground_score", "background_score", "valid"):
-                    diagnostic = np.round(
-                        np.clip(diagnostics[diagnostic_name], 0, 1) * 255
-                    ).astype(np.uint8)
-                    cv2.imwrite(
-                        os.path.join(diagnostic_dir, f"{base}_{diagnostic_name}.png"),
-                        diagnostic,
-                    )
-            else:
-                alpha = fuse_alpha_with_depth(
-                    alpha,
-                    depth,
-                    background_depth_model,
-                    depth_fusion_config,
-                )
-
         cv2.imwrite(os.path.join(output_dir, f"{base}_fgr.png"), fgr_img)
         cv2.imwrite(os.path.join(output_dir, f"{base}_alpha.png"), alpha)
 
@@ -423,45 +364,6 @@ def parse_args():
         default=50,
         help="Output video frame rate. Default: 50.",
     )
-    parser.add_argument(
-        "--depth-dir",
-        default=None,
-        help="Registered depth sequence whose stems match the RGB frame names.",
-    )
-    parser.add_argument(
-        "--background-depth-dir",
-        default=None,
-        help="Actor-free depth frames used to build the fixed-background model.",
-    )
-    parser.add_argument(
-        "--depth-scale",
-        type=float,
-        default=1.0,
-        help="Scale applied after reading depth. Defaults assume millimetres.",
-    )
-    parser.add_argument(
-        "--depth-background-tolerance",
-        type=float,
-        default=30.0,
-        help="Depth difference still treated as background, in scaled depth units.",
-    )
-    parser.add_argument(
-        "--depth-foreground-margin",
-        type=float,
-        default=100.0,
-        help="Depth difference treated as reliable foreground, in scaled depth units.",
-    )
-    parser.add_argument(
-        "--depth-boundary-width",
-        type=int,
-        default=5,
-        help="Uncertain depth-edge width that falls back to RVM alpha.",
-    )
-    parser.add_argument(
-        "--save-depth-diagnostics",
-        action="store_true",
-        help="Save depth foreground/background confidence maps.",
-    )
     return parser.parse_args()
 
 
@@ -485,22 +387,7 @@ def main():
     png_dir_cg = transform_exr_to_png(renamed_dir_cg)
 
     rvm_out_dir = r"D:/CODES/RVM/Results/Test/RVMResults"
-    depth_fusion_config = None
-    if args.depth_dir is not None or args.background_depth_dir is not None:
-        depth_fusion_config = DepthFusionConfig(
-            background_tolerance=args.depth_background_tolerance,
-            foreground_margin=args.depth_foreground_margin,
-            boundary_width=args.depth_boundary_width,
-        )
-    run_rvm_batch(
-        png_dir_video,
-        rvm_out_dir,
-        depth_dir=args.depth_dir,
-        background_depth_dir=args.background_depth_dir,
-        depth_scale=args.depth_scale,
-        depth_fusion_config=depth_fusion_config,
-        save_depth_diagnostics=args.save_depth_diagnostics,
-    )
+    run_rvm_batch(png_dir_video, rvm_out_dir)
 
     final_out_dir = r"D:/CODES/RVM/Results/Test/CompositingResults"
     composite_rvm_with_background(
