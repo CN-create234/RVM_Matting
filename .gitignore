@@ -8,6 +8,8 @@ __pycache__/
 venv*/
 
 # External repositories, downloaded models, and caches
+external/
+models/
 Midterm/MatAnyone2/
 Midterm/torch_cache/
 Midterm/_report_render/
